@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>M365 Security Assessment Dashboard</title>
+  <style>
+    :root { --bg:#0b1220; --fg:#e6eefc; --muted:#9fb3d9; --card:#121a2b; --accent:#4ea1ff; --border:#24314d; }
+    html,body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 system-ui,Segoe UI,Roboto}
+    header{padding:12px 16px;border-bottom:1px solid var(--border);display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+    header h1{font-size:18px;margin:0;font-weight:600}
+    button,select,input{background:#16223a;color:var(--fg);border:1px solid var(--border);border-radius:8px;padding:8px 12px}
+    button.primary{background:var(--accent);color:#03142b;border:0}
+    button:disabled{opacity:.6;cursor:not-allowed}
+    input[type="search"]{min-width:200px}
+    .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px;padding:14px}
+    .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px}
+    nav{display:flex;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border);flex-wrap:wrap}
+    nav a{color:var(--muted);text-decoration:none;padding:6px 12px;border-radius:10px}
+    nav a.active{background:#1a2947;color:#fff}
+    .hidden{display:none}
+    .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+    table{width:100%;border-collapse:collapse}
+    th,td{border-bottom:1px solid #223050;padding:8px 10px;text-align:left}
+    th{cursor:pointer}
+    small.mono{font-family:ui-monospace,Menlo,Consolas,monospace;color:var(--muted)}
+    .pill{background:#1d3156;border:1px solid #2c4477;padding:4px 8px;border-radius:999px}
+    /* overlay */
+    #overlay{position:fixed;inset:0;background:rgba(5,10,20,.6);backdrop-filter:saturate(120%) blur(2px);display:none;align-items:center;justify-content:center;z-index:9999}
+    #overlay .box{background:#0f182a;border:1px solid var(--border);border-radius:12px;padding:16px;min-width:320px;max-width:520px}
+    #overlay ul{margin:8px 0 0 18px;max-height:240px;overflow:auto}
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@3.17.0/lib/msal-browser.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/pptxgenjs@3.12.0/dist/pptxgen.bundle.js"></script>
+</head>
+<body>
+  <header>
+    <h1>M365 Security Assessment Dashboard</h1>
+    <div class="row">
+      <button id="loginBtn" class="primary">Sign in</button>
+      <button id="logoutBtn">Sign out</button>
+      <button id="collectBtn">Collect Data</button>
+      <button id="exportBtn">Export JSON</button>
+      <button id="exportPptBtn">Export to PowerPoint</button>
+      <label class="pill"><input type="file" id="importFile" hidden> <span id="importLabel" style="cursor:pointer">Import JSON</span></label>
+    </div>
+    <div style="margin-left:auto" class="row">
+      <input id="globalSearch" type="search" placeholder="Search..." />
+      <span id="status" class="pill">Ready</span>
+    </div>
+  </header>
+
+  <nav>
+    <a href="#main" data-tab="main" class="active">Main</a>
+    <a href="#m365" data-tab="m365">M365 Secure Score</a>
+    <a href="#azure" data-tab="azure">Azure Secure Score</a>
+    <a href="#xdr" data-tab="xdr">Defender XDR Devices</a>
+    <a href="#tvm" data-tab="tvm">Software & Vulnerabilities</a>
+    <a href="#ext" data-tab="ext">Browser Extensions</a>
+    <a href="#cm" data-tab="cm">Compliance Manager</a>
+  </nav>
+
+  <section id="tab-main" class="grid">
+    <div class="card">
+      <h3>Overview</h3>
+      <div class="row">
+        <div>Tenant: <span id="tenantName">-</span></div>
+        <div>Account: <span id="accountName">-</span></div>
+      </div>
+      <p>Use Sign in to acquire delegated permissions, then Collect Data to fetch from Microsoft Graph and Defender APIs. Data is cached locally and can be exported for offline use.</p>
+      <ul>
+        <li>M365 Secure Score via Microsoft Graph</li>
+        <li>Azure Secure Score via ARM (via optional proxy)</li>
+        <li>Defender XDR: device heartbeat, onboarding, OS versions</li>
+        <li>TVM: software inventory, vulnerabilities, risk</li>
+        <li>Browser Extensions assessment (export API)</li>
+        <li>Compliance Manager: upload CSV export</li>
+      </ul>
+    </div>
+    <div class="card"><h3>Overall Secure Score</h3><canvas id="overallScoreChart" height="130"></canvas></div>
+    <div class="card"><h3>Recent Runs</h3><div id="runHistory"></div></div>
+    <div class="card"><h3>Debug Log</h3><div id="debugLog" style="max-height:200px;overflow:auto;font-family:ui-monospace,monospace;color:var(--muted)"></div></div>
+  </section>
+
+  <section id="tab-m365" class="grid hidden">
+    <div class="card"><h3>M365 Secure Score (Graph)</h3><canvas id="m365ScoreChart" height="160"></canvas></div>
+    <div class="card"><h3>Controls</h3><div style="max-height:300px;overflow:auto"><table id="m365Controls"><thead><tr><th>Category</th><th>Title</th><th>Max</th><th>Rank</th></tr></thead><tbody></tbody></table></div></div>
+  </section>
+
+  <section id="tab-azure" class="grid hidden">
+    <div class="card"><h3>Azure Secure Score (Defender for Cloud)</h3>
+      <p>Requires app-only/proxy due to ARM CORS. Configure proxyBaseUrl in CONFIG and ensure proxy exposes /arm/secureScores.</p>
+      <div id="azureScore">Not collected</div>
+    </div>
+  </section>
+
+  <section id="tab-xdr" class="grid hidden">
+    <div class="card"><h3>Device Onboarding Status</h3><canvas id="onboardChart" height="160"></canvas></div>
+    <div class="card"><h3>Last Contact Timeline</h3><canvas id="heartbeatChart" height="160"></canvas></div>
+    <div class="card"><h3>OS Platforms</h3><canvas id="osChart" height="160"></canvas></div>
+  </section>
+
+  <section id="tab-tvm" class="grid hidden">
+    <div class="card"><h3>Top Software (by exposed machines)</h3><div style="max-height:300px;overflow:auto"><table id="softTbl"><thead><tr><th>Name</th><th>Vendor</th><th>Exposed</th><th>Weakn.</th></tr></thead><tbody></tbody></table></div></div>
+    <div class="card"><h3>Critical Vulnerabilities</h3><div style="max-height:300px;overflow:auto"><table id="vulnTbl"><thead><tr><th>CVE</th><th>CVSS</th><th>Severity</th><th>Exposed</th></tr></thead><tbody></tbody></table></div></div>
+  </section>
+
+  <section id="tab-ext" class="grid hidden">
+    <div class="card"><h3>Browser Extensions</h3>
+      <p>Collected via Defender Vulnerability Management export API.</p>
+      <div style="max-height:300px;overflow:auto"><table id="extTbl"><thead><tr><th>Name</th><th>Publisher</th><th>Devices</th><th>Permissions</th></tr></thead><tbody></tbody></table></div>
+    </div>
+  </section>
+
+  <section id="tab-cm" class="grid hidden">
+    <div class="card"><h3>Compliance Manager</h3>
+      <p>No general public API. Upload CSV export to visualize baseline and gaps (coming soon).</p>
+      <input type="file" id="cmCsv" accept=".csv" />
+      <div id="cmStatus">No data</div>
+    </div>
+  </section>
+
+<script>
+// --- Dynamic configuration ---
+window.CONFIG_DEFAULTS={tenantId:"common",clientId:"",authority:null,graphScopes:["SecurityEvents.Read.All"],mdeScopes:["Machine.Read","Software.Read","Vulnerability.Read"],proxyBaseUrl:"",endpoints:{graph:"https://graph.microsoft.com",mde:"https://api.security.microsoft.com"},features:{useAdvancedHunting:false}};window.CONFIG=window.CONFIG_DEFAULTS;async function loadConfig(){try{const r=await fetch('config.json',{cache:'no-store'});if(!r.ok)throw 0;const c=await r.json();window.CONFIG={...window.CONFIG_DEFAULTS,...c,endpoints:{...window.CONFIG_DEFAULTS.endpoints,...(c.endpoints||{})},features:{...window.CONFIG_DEFAULTS.features,...(c.features||{})}}}catch{}}
+// --- Utilities & logging ---
+const waitMs=(ms)=>new Promise(r=>setTimeout(r,ms));function setStatus(s){document.getElementById('status').textContent=s}function log(msg){const el=document.getElementById('debugLog');if(el){const d=document.createElement('div');d.textContent=`${new Date().toLocaleTimeString()} ${msg}`;el.prepend(d)}}
+function ensureOverlay(){let o=document.getElementById('overlay');if(!o){o=document.createElement('div');o.id='overlay';o.innerHTML='<div class="box"><b>Collecting data…</b><ul id="progressList"></ul></div>';document.body.appendChild(o)}return o}
+function startProgress(steps){const o=ensureOverlay();const ul=o.querySelector('#progressList');ul.innerHTML='';steps.forEach(s=>{const li=document.createElement('li');li.textContent=s;ul.appendChild(li)});o.style.display='flex'}
+function stepDone(i,msg){const lis=[...document.querySelectorAll('#progressList li')];if(lis[i]) lis[i].textContent=`✔ ${msg}`}
+function finishProgress(){const o=document.getElementById('overlay');if(o) o.style.display='none'}
+// --- Scope helpers ---
+function normalizeScopes(scopes,type){return scopes.map(s=> s.includes('://')?s:(type==='mde'? `${CONFIG.endpoints.mde}/${s}`:s))}
+function tokenScopes(tok){try{return new Set(JSON.parse(atob(tok.split('.')[1])).scp.split(' '))}catch{return new Set()}}
+function requireScopes(scopes,set){const missing=[];for(const s of scopes){const key=s.split('/').pop();if(!set.has(key)) missing.push(key)}return missing}
+// --- MSAL (lazy) ---
+let msalInstance=null,account=null;function ensureMsal(){if(msalInstance) return msalInstance;const tenant=CONFIG.tenantId||'common';const authority=CONFIG.authority||`https://login.microsoftonline.com/${tenant}`;if(!CONFIG.clientId){setStatus('Config required: set clientId in config.json');throw new Error('Missing clientId')}msalInstance=new msal.PublicClientApplication({auth:{clientId:CONFIG.clientId,authority},cache:{cacheLocation:'localStorage',storeAuthStateInCookie:false}});const acc=msalInstance.getAllAccounts()[0];if(acc){account=acc;updateIdentity()}return msalInstance}
+async function login(){try{const app=ensureMsal();const scopes=[...normalizeScopes(CONFIG.graphScopes,'graph'),...normalizeScopes(CONFIG.mdeScopes,'mde')];const resp=await app.loginPopup({scopes});account=resp.account;updateIdentity()}catch(e){log(`Sign-in error: ${e.message||e}`);setStatus('Sign-in failed')}}
+async function logout(){try{const app=ensureMsal();await app.logoutPopup();account=null;updateIdentity();setStatus('Signed out')}catch(e){log(`Logout error: ${e.message||e}`)}}
+function updateIdentity(){document.getElementById('tenantName').textContent=CONFIG.tenantId||'common';document.getElementById('accountName').textContent=account?account.username:'-'}
+async function acquireToken(resource){const app=ensureMsal();const scopes=resource==='graph'?normalizeScopes(CONFIG.graphScopes,'graph'):normalizeScopes(CONFIG.mdeScopes,'mde');const req={scopes,account:account||(app.getAllAccounts()[0]||null)};try{return (await app.acquireTokenSilent(req)).accessToken}catch{return (await app.acquireTokenPopup(req)).accessToken}}
+// --- HTTP with backoff ---
+async function httpGet(url,token){for(let a=0;a<6;a++){const h={};if(token)h.Authorization=`Bearer ${token}`;const r=await fetch(url,{headers:h});if(r.status===429||r.status===503){const ra=parseInt(r.headers.get('Retry-After')||'2',10);await waitMs((Math.min(ra,30)+(1<<a))*1000);continue}if(!r.ok)throw new Error(`HTTP ${r.status} ${url}`);return await r.json()}throw new Error(`Max retries ${url}`)}
+// --- Cache & import/export ---
+function saveCache(k,v){localStorage.setItem(k,JSON.stringify({ts:Date.now(),value:v}))}function loadCache(k){try{const v=JSON.parse(localStorage.getItem(k)||'null');return v&&v.value}catch{return null}}function exportAll(){const data={m365:loadCache('m365')||{},mde:loadCache('mde')||{},azure:loadCache('azure')||{},meta:{ts:Date.now()}};const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='m365-security-data.json';a.click()}function importAll(f){const r=new FileReader();r.onload=()=>{const d=JSON.parse(r.result);if(d.m365)saveCache('m365',d.m365);if(d.mde)saveCache('mde',d.mde);if(d.azure)saveCache('azure',d.azure);renderAll();setStatus('Imported JSON')};r.readAsText(f)}
+// --- Collector ---
+async function collectAll(){const btns=['loginBtn','logoutBtn','collectBtn','exportBtn','exportPptBtn'];btns.forEach(id=>document.getElementById(id).disabled=true);try{setStatus('Collecting…');if(!account) await login();const gTok=await acquireToken('graph');const mTok=await acquireToken('mde');const g=CONFIG.endpoints.graph,m=CONFIG.endpoints.mde;const steps=['Graph secureScores','Graph controlProfiles','MDE machines','MDE software','MDE vulnerabilities','MDE extensions','Azure secure score'];startProgress(steps);const gReq=['SecurityEvents.Read.All'];let miss=requireScopes(gReq,tokenScopes(gTok));if(miss.length){log(`Missing Graph scopes: ${miss.join(', ')}`)}const mReq=['Machine.Read','Software.Read','Vulnerability.Read'];miss=requireScopes(mReq,tokenScopes(mTok));if(miss.length){log(`Missing MDE scopes: ${miss.join(', ')}`)}const m365={};try{m365.secureScores=await httpGet(`${g}/v1.0/security/secureScores?$top=30`,gTok)}catch(e){log(`Graph secureScores failed: ${e}`);m365.secureScores={value:[]}}stepDone(0,'Graph secureScores');try{m365.controlProfiles=await httpGet(`${g}/v1.0/security/secureScoreControlProfiles`,gTok)}catch(e){log(`Graph controlProfiles failed: ${e}`);m365.controlProfiles={value:[]}}stepDone(1,'Graph controlProfiles');saveCache('m365',m365);const mde={};try{mde.machines=await httpGet(`${m}/api/machines?$top=10000`,mTok)}catch(e){log(`MDE machines failed: ${e}`);mde.machines={value:[]}}stepDone(2,'MDE machines');try{mde.software=await httpGet(`${m}/api/Software?$top=10000`,mTok)}catch(e){log(`MDE software failed: ${e}`);mde.software={value:[]}}stepDone(3,'MDE software');try{mde.vulns=await httpGet(`${m}/api/Vulnerabilities?$top=8000`,mTok)}catch(e){log(`MDE vulns failed: ${e}`);mde.vulns={value:[]}}stepDone(4,'MDE vulnerabilities');try{mde.extensions=await httpGet(`${m}/api/browserextensions/export`,mTok)}catch(e){log(`MDE extensions failed: ${e}`);mde.extensions={value:[]}}stepDone(5,'MDE extensions');saveCache('mde',mde);if(CONFIG.proxyBaseUrl){const url=CONFIG.proxyBaseUrl.replace(/\/$/,'')+'/arm/secureScores';try{const az=await httpGet(url);saveCache('azure',az)}catch(e){log(`Azure proxy failed: ${e}`)}}stepDone(6,'Azure secure score');renderAll();setStatus('Collection complete');addRunHistory()}catch(e){log(`Collect failed: ${e.message||e}`);setStatus('Collection failed')}finally{finishProgress();btns.forEach(id=>document.getElementById(id).disabled=false)}}
+// --- Rendering ---
+let charts={};function drawChart(id,type,label,labels,data){const ctx=document.getElementById(id);if(!ctx)return;charts[id]?.destroy?.();charts[id]=new Chart(ctx,{type,data:{labels,datasets:[{label,data,borderColor:'#4ea1ff',backgroundColor:'rgba(78,161,255,0.2)'}]},options:{plugins:{legend:{display:true}},responsive:true,maintainAspectRatio:false}})}
+function renderOverview(){const m365=loadCache('m365');const scores=(m365?.secureScores?.value)||[];const labels=scores.map(s=>new Date(s.createdDateTime).toLocaleDateString());const data=scores.map(s=>Math.round((s.currentScore/s.maxScore)*100));drawChart('overallScoreChart','line','Overall Secure Score %',labels,data)}
+function renderM365(){const m365=loadCache('m365')||{};const scores=m365.secureScores?.value||[];const labels=scores.map(s=>new Date(s.createdDateTime).toLocaleDateString());const data=scores.map(s=>s.currentScore);drawChart('m365ScoreChart','line','M365 Secure Score',labels,data);const tbody=document.querySelector('#m365Controls tbody');tbody.innerHTML='';(m365.controlProfiles?.value||[]).slice(0,200).forEach(c=>{const tr=document.createElement('tr');tr.innerHTML=`<td>${c.controlCategory||''}</td><td>${c.title||c.id}</td><td>${c.maxScore||''}</td><td>${c.rank||''}</td>`;tbody.appendChild(tr)})}
+function renderXdr(){const mde=loadCache('mde')||{};const machines=mde.machines?.value||[];const byStatus=groupCount(machines,m=>(m.onboardingstatus||'Unknown'));drawChart('onboardChart','doughnut','Onboarding',Object.keys(byStatus),Object.values(byStatus));const byDay=groupCount(machines,m=>(m.lastSeen?new Date(m.lastSeen).toISOString().slice(0,10):'Unknown'));const sorted=Object.entries(byDay).sort((a,b)=>a[0].localeCompare(b[0]));drawChart('heartbeatChart','bar','Last Seen',sorted.map(x=>x[0]),sorted.map(x=>x[1]));const byOs=groupCount(machines,m=>(m.osPlatform||'Unknown'));drawChart('osChart','bar','OS',Object.keys(byOs),Object.values(byOs))}
+function renderTvm(){const mde=loadCache('mde')||{};const sw=(mde.software?.value||[]).sort((a,b)=>(b.exposedMachines||0)-(a.exposedMachines||0));const tbody=document.querySelector('#softTbl tbody');tbody.innerHTML='';sw.slice(0,100).forEach(s=>{const tr=document.createElement('tr');tr.innerHTML=`<td>${s.name}</td><td>${s.vendor}</td><td>${s.exposedMachines||0}</td><td>${s.weaknesses||0}</td>`;tbody.appendChild(tr)});const vul=(mde.vulns?.value||[]).filter(v=>(v.cvssScore||0)>=7).sort((a,b)=>(b.cvssScore||0)-(a.cvssScore||0));const vtb=document.querySelector('#vulnTbl tbody');vtb.innerHTML='';vul.slice(0,200).forEach(v=>{const tr=document.createElement('tr');tr.innerHTML=`<td>${v.cveId||v.id||''}</td><td>${v.cvssScore||''}</td><td>${v.severity||''}</td><td>${v.exposedMachines||''}</td>`;vtb.appendChild(tr)})}
+function renderExt(){const mde=loadCache('mde')||{};const ex=(mde.extensions?.value||[]);const tb=document.querySelector('#extTbl tbody');tb.innerHTML='';ex.slice(0,200).forEach(e=>{const tr=document.createElement('tr');tr.innerHTML=`<td>${e.name||''}</td><td>${e.publisher||''}</td><td>${e.exposedMachines||e.devicesCount||''}</td><td><small class="mono">${(e.permissions||[]).join(', ')}</small></td>`;tb.appendChild(tr)})}
+function renderAzure(){const az=loadCache('azure');document.getElementById('azureScore').textContent=az?JSON.stringify(az).slice(0,400)+'...':'Not collected'}
+function renderAll(){renderM365();renderXdr();renderTvm();renderExt();renderAzure();renderOverview()}
+const groupCount=(arr,fn)=>arr.reduce((m,x)=>{const k=fn(x);m[k]=(m[k]||0)+1;return m},{})
+// --- Sorting & search ---
+function makeSortable(id){const t=document.getElementById(id);if(!t)return;const ths=t.querySelectorAll('th');ths.forEach((th,i)=>{th.addEventListener('click',()=>{const rows=[...t.tBodies[0].rows];const asc=th.dataset.sort!=='asc';rows.sort((a,b)=>{const A=(a.cells[i].innerText||'').toLowerCase();const B=(b.cells[i].innerText||'').toLowerCase();return asc?A.localeCompare(B):B.localeCompare(A)});th.dataset.sort=asc?'asc':'desc';rows.forEach(r=>t.tBodies[0].appendChild(r))})})}
+function applyGlobalSearch(){const q=(document.getElementById('globalSearch').value||'').toLowerCase();document.querySelectorAll('section:not(.hidden) table tbody').forEach(tb=>{[...tb.rows].forEach(r=>{r.style.display=[...r.cells].some(c=>c.innerText.toLowerCase().includes(q))?'':'none'})})}
+// --- PowerPoint ---
+async function exportPpt(){
+  if(!window.PptxGenJS){alert('PowerPoint library not loaded');return}
+  const pptx=new PptxGenJS(); const m365=loadCache('m365')||{}; const mde=loadCache('mde')||{}; const az=loadCache('azure')||null;
+  // Title & Executive Summary
+  const title=pptx.addSlide();
+  title.addText('M365 Security Assessment',{x:0.5,y:0.4,fontSize:30,bold:true,color:'203864'});
+  title.addText(new Date().toLocaleString(),{x:0.5,y:1.0,fontSize:12,color:'666'});
+  const scores=(m365.secureScores?.value)||[];
+  const pct=scores.length?Math.round((scores.at(-1).currentScore/scores.at(-1).maxScore)*100):'N/A';
+  title.addText(`Overall Secure Score: ${pct}%`,{x:0.5,y:1.4,fontSize:20,bold:true,color:'1F4E79'});
+  try{const img=document.getElementById('overallScoreChart').toDataURL('image/png');title.addImage({data:img,x:0.5,y:1.9,w:8.5})}catch{}
+  // Device Security Posture
+  const s1=pptx.addSlide(); s1.addText('Device Security Posture',{x:0.5,y:0.3,fontSize:22,bold:true,color:'203864'});
+  try{s1.addImage({data:document.getElementById('onboardChart').toDataURL('image/png'),x:0.5,y:1.0,w:4.4}); s1.addImage({data:document.getElementById('osChart').toDataURL('image/png'),x:5.1,y:1.0,w:4.4})}catch{}
+  // Critical Vulnerabilities
+  const s2=pptx.addSlide(); s2.addText('Critical Vulnerabilities',{x:0.5,y:0.3,fontSize:22,bold:true,color:'203864'});
+  const vulRows=(mde.vulns?.value||[]).filter(v=>(v.cvssScore||0)>=7).sort((a,b)=>(b.cvssScore||0)-(a.cvssScore||0)).slice(0,12)
+    .map(v=>[v.cveId||v.id||'', String(v.cvssScore||''), v.severity||'', String(v.exposedMachines||'')]);
+  if(vulRows.length){ s2.addTable([['CVE','CVSS','Severity','Exposed']].concat(vulRows),{x:0.5,y:1.0,w:8.8,fontSize:12, colW:[3.6,1.0,1.6,1.2]}); }
+  // M365 Secure Score Control Recommendations
+  const s3=pptx.addSlide(); s3.addText('M365 Secure Score – Recommendations',{x:0.5,y:0.3,fontSize:22,bold:true,color:'203864'});
+  const cps=(m365.controlProfiles?.value||[]).slice(0,12).map(c=>[
+    c.title||c.id||'', c.controlCategory||'', String(c.maxScore||''), (c.actionType||'Review')
+  ]);
+  if(cps.length){ s3.addTable([['Control','Category','MaxScore','Action']].concat(cps),{x:0.5,y:1.0,w:8.8,fontSize:12,colW:[4.6,2.2,1.0,1.5]}); }
+  // Azure Secure Score Summary (if available)
+  const s4=pptx.addSlide(); s4.addText('Azure Secure Score',{x:0.5,y:0.3,fontSize:22,bold:true,color:'203864'});
+  if(az){
+    const text=typeof az==='object'? JSON.stringify(az).slice(0,500)+'…' : String(az);
+    s4.addText('Summary (via proxy):',{x:0.5,y:0.9,fontSize:14,bold:true});
+    s4.addText(text,{x:0.5,y:1.2,fontSize:12,color:'666',w:8.8,h:3,shape:pptx.ShapeType.rect});
+  } else {
+    s4.addText('No Azure Secure Score data. Configure proxyBaseUrl to enable.',{x:0.5,y:0.9,fontSize:14,color:'A00'});
+  }
+  // Browser Extensions Summary
+  const s5=pptx.addSlide(); s5.addText('Browser Extensions – Assessment',{x:0.5,y:0.3,fontSize:22,bold:true,color:'203864'});
+  const ex=(mde.extensions?.value||[]); const total=ex.length; const publishers=[...new Set(ex.map(e=>e.publisher||'Unknown'))].length;
+  const permMap={}; ex.forEach(e=>(e.permissions||[]).forEach(p=>permMap[p]=(permMap[p]||0)+1));
+  const topPerms=Object.entries(permMap).sort((a,b)=>b[1]-a[1]).slice(0,10).map(([p,c])=>[p,String(c)]);
+  s5.addText(`Total extensions: ${total}\nUnique publishers: ${publishers}`,{x:0.5,y:0.9,fontSize:14});
+  if(topPerms.length){ s5.addTable([['Permission','Count']].concat(topPerms),{x:0.5,y:1.5,w:8.8,fontSize:12,colW:[6.6,2.0]}); }
+  // Compliance Manager (placeholder)
+  const s6=pptx.addSlide(); s6.addText('Compliance Manager',{x:0.5,y:0.3,fontSize:22,bold:true,color:'203864'});
+  s6.addText('Import CSV in the dashboard to populate Compliance baseline and gaps. (Feature coming soon)',{x:0.5,y:0.9,fontSize:14,color:'666',w:8.8});
+  await pptx.writeFile('M365-Security-Assessment.pptx')
+}
+// --- UI wiring & startup ---
+const tabs=[...document.querySelectorAll('nav a')];for(const a of tabs){a.addEventListener('click',ev=>{ev.preventDefault();tabs.forEach(t=>t.classList.remove('active'));a.classList.add('active');const id=a.dataset.tab;document.querySelectorAll('section[id^="tab-"]').forEach(s=>s.classList.add('hidden'));document.getElementById('tab-'+id).classList.remove('hidden')})}
+document.getElementById('loginBtn').onclick=login;document.getElementById('logoutBtn').onclick=logout;document.getElementById('collectBtn').onclick=collectAll;document.getElementById('exportBtn').onclick=exportAll;document.getElementById('exportPptBtn').onclick=exportPpt;const importLabel=document.getElementById('importLabel');const importFile=document.getElementById('importFile');importLabel.onclick=()=>importFile.click();importFile.onchange=e=>{const f=e.target.files[0];if(f)importAll(f)};document.getElementById('globalSearch').addEventListener('input',applyGlobalSearch)
+window.addEventListener('load',async()=>{await loadConfig();updateIdentity();renderAll();makeSortable('m365Controls');makeSortable('softTbl');makeSortable('vulnTbl');makeSortable('extTbl');if(!CONFIG.clientId){setStatus('Config required: set clientId in config.json');document.getElementById('loginBtn').disabled=true;document.getElementById('collectBtn').disabled=true}})
+function addRunHistory(){const el=document.getElementById('runHistory');const now=new Date().toLocaleString();const div=document.createElement('div');div.textContent=`Run at ${now}`;el.prepend(div)}
+</script>
+</body>
+</html>
+

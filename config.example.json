@@ -1,0 +1,22 @@
+{
+  "tenantId": "common",
+  "clientId": "YOUR_CLIENT_ID_HERE",
+  "authority": "https://login.microsoftonline.com/common",
+  "graphScopes": [
+    "SecurityEvents.Read.All"
+  ],
+  "mdeScopes": [
+    "Machine.Read",
+    "Software.Read",
+    "Vulnerability.Read"
+  ],
+  "proxyBaseUrl": "",
+  "endpoints": {
+    "graph": "https://graph.microsoft.com",
+    "mde": "https://api.security.microsoft.com"
+  },
+  "features": {
+    "useAdvancedHunting": false
+  }
+}
+

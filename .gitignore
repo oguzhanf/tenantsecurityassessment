@@ -1,0 +1,13 @@
+# Ignore sensitive/local config
+config.json
+
+# OS/editor junk
+.DS_Store
+Thumbs.db
+*.log
+.vscode/
+
+# Generated exports
+m365-security-data.json
+M365-Security-Assessment.pptx
+

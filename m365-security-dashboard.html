@@ -7,6 +7,7 @@
   <style>
     :root { --bg:#0b1220; --fg:#e6eefc; --muted:#9fb3d9; --card:#121a2b; --accent:#4ea1ff; --border:#24314d; }
     html,body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 system-ui,Segoe UI,Roboto}
+    html{overflow-y:scroll}
     header{padding:12px 16px;border-bottom:1px solid var(--border);display:flex;gap:12px;align-items:center;flex-wrap:wrap}
     header h1{font-size:18px;margin:0;font-weight:600}
     button,select,input{background:#16223a;color:var(--fg);border:1px solid var(--border);border-radius:8px;padding:8px 12px}
@@ -14,7 +15,7 @@
     button:disabled{opacity:.6;cursor:not-allowed}
     input[type="search"]{min-width:200px}
     .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:14px;padding:14px}
-    .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px}
+    .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:14px;overflow:hidden}
     nav{display:flex;gap:8px;padding:8px 12px;border-bottom:1px solid var(--border);flex-wrap:wrap}
     nav a{color:var(--muted);text-decoration:none;padding:6px 12px;border-radius:10px}
     nav a.active{background:#1a2947;color:#fff}
@@ -25,6 +26,7 @@
     th{cursor:pointer}
     small.mono{font-family:ui-monospace,Menlo,Consolas,monospace;color:var(--muted)}
     .pill{background:#1d3156;border:1px solid #2c4477;padding:4px 8px;border-radius:999px}
+    canvas{display:block}
     /* overlay */
     #overlay{position:fixed;inset:0;background:rgba(5,10,20,.6);backdrop-filter:saturate(120%) blur(2px);display:none;align-items:center;justify-content:center;z-index:9999}
     #overlay .box{background:#0f182a;border:1px solid var(--border);border-radius:12px;padding:16px;min-width:320px;max-width:520px}
@@ -152,7 +154,7 @@ function saveCache(k,v){localStorage.setItem(k,JSON.stringify({ts:Date.now(),val
 // --- Collector ---
 async function collectAll(){const btns=['loginBtn','logoutBtn','collectBtn','exportBtn','exportPptBtn'];btns.forEach(id=>document.getElementById(id).disabled=true);try{setStatus('Collecting…');if(!account) await login();const gTok=await acquireToken('graph');const mTok=await acquireToken('mde');const g=CONFIG.endpoints.graph,m=CONFIG.endpoints.mde;const steps=['Graph secureScores','Graph controlProfiles','MDE machines','MDE software','MDE vulnerabilities','MDE extensions','Azure secure score'];startProgress(steps);const gReq=['SecurityEvents.Read.All'];let miss=requireScopes(gReq,tokenScopes(gTok));if(miss.length){log(`Missing Graph scopes: ${miss.join(', ')}`)}const mReq=['Machine.Read','Software.Read','Vulnerability.Read'];miss=requireScopes(mReq,tokenScopes(mTok));if(miss.length){log(`Missing MDE scopes: ${miss.join(', ')}`)}const m365={};try{m365.secureScores=await httpGet(`${g}/v1.0/security/secureScores?$top=30`,gTok)}catch(e){log(`Graph secureScores failed: ${e}`);m365.secureScores={value:[]}}stepDone(0,'Graph secureScores');try{m365.controlProfiles=await httpGet(`${g}/v1.0/security/secureScoreControlProfiles`,gTok)}catch(e){log(`Graph controlProfiles failed: ${e}`);m365.controlProfiles={value:[]}}stepDone(1,'Graph controlProfiles');saveCache('m365',m365);const mde={};try{mde.machines=await httpGet(`${m}/api/machines?$top=10000`,mTok)}catch(e){log(`MDE machines failed: ${e}`);mde.machines={value:[]}}stepDone(2,'MDE machines');try{mde.software=await httpGet(`${m}/api/Software?$top=10000`,mTok)}catch(e){log(`MDE software failed: ${e}`);mde.software={value:[]}}stepDone(3,'MDE software');try{mde.vulns=await httpGet(`${m}/api/Vulnerabilities?$top=8000`,mTok)}catch(e){log(`MDE vulns failed: ${e}`);mde.vulns={value:[]}}stepDone(4,'MDE vulnerabilities');try{mde.extensions=await httpGet(`${m}/api/browserextensions/export`,mTok)}catch(e){log(`MDE extensions failed: ${e}`);mde.extensions={value:[]}}stepDone(5,'MDE extensions');saveCache('mde',mde);if(CONFIG.proxyBaseUrl){const url=CONFIG.proxyBaseUrl.replace(/\/$/,'')+'/arm/secureScores';try{const az=await httpGet(url);saveCache('azure',az)}catch(e){log(`Azure proxy failed: ${e}`)}}stepDone(6,'Azure secure score');renderAll();setStatus('Collection complete');addRunHistory()}catch(e){log(`Collect failed: ${e.message||e}`);setStatus('Collection failed')}finally{finishProgress();btns.forEach(id=>document.getElementById(id).disabled=false)}}
 // --- Rendering ---
-let charts={};function drawChart(id,type,label,labels,data){const ctx=document.getElementById(id);if(!ctx)return;charts[id]?.destroy?.();charts[id]=new Chart(ctx,{type,data:{labels,datasets:[{label,data,borderColor:'#4ea1ff',backgroundColor:'rgba(78,161,255,0.2)'}]},options:{plugins:{legend:{display:true}},responsive:true,maintainAspectRatio:false}})}
+let charts={};function drawChart(id,type,label,labels,data){const ctx=document.getElementById(id);if(!ctx)return;charts[id]?.destroy?.();charts[id]=new Chart(ctx,{type,data:{labels,datasets:[{label,data,borderColor:'#4ea1ff',backgroundColor:'rgba(78,161,255,0.2)'}]},options:{animation:false,resizeDelay:200,plugins:{legend:{display:true}},responsive:true,maintainAspectRatio:false}})}
 function renderOverview(){const m365=loadCache('m365');const scores=(m365?.secureScores?.value)||[];const labels=scores.map(s=>new Date(s.createdDateTime).toLocaleDateString());const data=scores.map(s=>Math.round((s.currentScore/s.maxScore)*100));drawChart('overallScoreChart','line','Overall Secure Score %',labels,data)}
 function renderM365(){const m365=loadCache('m365')||{};const scores=m365.secureScores?.value||[];const labels=scores.map(s=>new Date(s.createdDateTime).toLocaleDateString());const data=scores.map(s=>s.currentScore);drawChart('m365ScoreChart','line','M365 Secure Score',labels,data);const tbody=document.querySelector('#m365Controls tbody');tbody.innerHTML='';(m365.controlProfiles?.value||[]).slice(0,200).forEach(c=>{const tr=document.createElement('tr');tr.innerHTML=`<td>${c.controlCategory||''}</td><td>${c.title||c.id}</td><td>${c.maxScore||''}</td><td>${c.rank||''}</td>`;tbody.appendChild(tr)})}
 function renderXdr(){const mde=loadCache('mde')||{};const machines=mde.machines?.value||[];const byStatus=groupCount(machines,m=>(m.onboardingstatus||'Unknown'));drawChart('onboardChart','doughnut','Onboarding',Object.keys(byStatus),Object.values(byStatus));const byDay=groupCount(machines,m=>(m.lastSeen?new Date(m.lastSeen).toISOString().slice(0,10):'Unknown'));const sorted=Object.entries(byDay).sort((a,b)=>a[0].localeCompare(b[0]));drawChart('heartbeatChart','bar','Last Seen',sorted.map(x=>x[0]),sorted.map(x=>x[1]));const byOs=groupCount(machines,m=>(m.osPlatform||'Unknown'));drawChart('osChart','bar','OS',Object.keys(byOs),Object.values(byOs))}
